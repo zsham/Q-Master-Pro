@@ -1,0 +1,7 @@
+{
+  "name": "Q-Master Pro",
+  "description": "A sophisticated Queue Management System featuring QR-based ticket generation, multi-counter administration, and AI-powered reporting for efficiency analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
