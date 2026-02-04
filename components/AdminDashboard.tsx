@@ -8,10 +8,8 @@ import {
   TrendingUp, 
   RefreshCcw,
   Volume2,
-  BrainCircuit,
   Camera,
   X,
-  Mic2,
   UserMinus,
   QrCode,
   Users,
@@ -20,13 +18,15 @@ import {
   UserPlus,
   ArrowRight,
   Shield,
-  Waves,
   Trash2,
   AlertTriangle,
   Layout,
-  VolumeX
+  Download,
+  Search,
+  Calendar,
+  Filter
 } from 'lucide-react';
-import { generateAIReport, generateCallingAudio } from '../services/geminiService';
+import { generateCallingAudio } from '../services/geminiService';
 import jsQR from 'jsqr';
 
 // Audio Helpers
@@ -93,10 +93,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // UI State
   const [activeTab, setActiveTab] = useState<'LIVE' | 'REPORT' | 'STAFF'>('LIVE');
-  const [reportRange, setReportRange] = useState<'WEEK' | 'MONTH' | 'YEAR'>('WEEK');
-  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-  const [aiReport, setAiReport] = useState<string | null>(null);
   const [isCallingAudio, setIsCallingAudio] = useState<string | null>(null);
+  const [filterDate, setFilterDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Registration & Counter State
   const [regUser, setRegUser] = useState('');
@@ -116,6 +115,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     queue.tickets.filter(t => t.status === TicketStatus.WAITING).sort((a, b) => a.createdAt - b.createdAt),
     [queue.tickets]
   );
+
+  const filteredHistoryTickets = useMemo(() => {
+    return queue.tickets.filter(t => {
+      const ticketDate = new Date(t.createdAt).toISOString().split('T')[0];
+      const matchesDate = !filterDate || ticketDate === filterDate;
+      const matchesSearch = !searchQuery || t.number.toString().includes(searchQuery);
+      return matchesDate && matchesSearch;
+    }).sort((a, b) => b.createdAt - a.createdAt);
+  }, [queue.tickets, filterDate, searchQuery]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -178,7 +186,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const playAnnouncement = async (ticketNumber: number, counterName: string, counterId: string) => {
     setIsCallingAudio(counterId);
-    // Find the voice preference for the person logged in OR the person assigned to this counter
     const currentStaffPref = currentUser?.voicePreference;
     const assignedStaffPref = queue.users.find(u => u.assignedCounterId === counterId)?.voicePreference;
     const voicePref = currentStaffPref || assignedStaffPref || 'MAN';
@@ -226,15 +233,39 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await playAnnouncement(ticket.number, counter.name, counter.id);
   };
 
-  const handleAIReport = async () => {
-    setIsGeneratingReport(true);
-    setAiReport(null);
-    try {
-      const report = await generateAIReport(queue.tickets, reportRange);
-      setAiReport(report);
-    } finally {
-      setIsGeneratingReport(false);
-    }
+  const handleDownloadCSV = () => {
+    const headers = ["Ticket Number", "Status", "Counter", "Created At", "Called At", "Served At", "Wait Time (Min)", "Service Time (Min)"];
+    
+    const rows = filteredHistoryTickets.map(t => {
+      const counterName = queue.counters.find(c => c.id === t.counterId)?.name || "N/A";
+      const waitTime = t.calledAt ? ((t.calledAt - t.createdAt) / 60000).toFixed(2) : "N/A";
+      const serviceTime = (t.servedAt && t.calledAt) ? ((t.servedAt - t.calledAt) / 60000).toFixed(2) : "N/A";
+      
+      return [
+        t.number,
+        t.status,
+        `"${counterName}"`,
+        `"${new Date(t.createdAt).toLocaleString()}"`,
+        t.calledAt ? `"${new Date(t.calledAt).toLocaleString()}"` : "N/A",
+        t.servedAt ? `"${new Date(t.servedAt).toLocaleString()}"` : "N/A",
+        waitTime,
+        serviceTime
+      ];
+    });
+
+    const csvContent = [headers, ...rows]
+      .map(e => e.join(","))
+      .join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Queue_Report_${filterDate || 'Full'}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const isFullAdmin = currentUser?.role === UserRole.FULL_ADMIN;
@@ -252,15 +283,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   );
 
   const handleDeleteStaffLocal = (userId: string) => {
-    if (window.confirm("FATAL: Delete this staff account? Access will be revoked immediately and their counter will be freed.")) {
+    if (window.confirm("FATAL: Delete this staff account? Access will be revoked immediately.")) {
       onDeleteStaff(userId);
     }
   };
 
   const handleResetLocal = () => {
-    if (window.confirm("WARNING: This will wipe ALL data, logout everyone, and reset to factory defaults. Are you absolutely sure?")) {
+    if (window.confirm("WARNING: This will wipe ALL data. Are you absolutely sure?")) {
       onReset();
-      alert("System has been fully reset to default state.");
     }
   };
 
@@ -344,7 +374,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
            <button onClick={() => setActiveTab('LIVE')} className={`px-6 py-3 rounded-xl text-sm font-black transition-all ${activeTab === 'LIVE' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500 hover:text-slate-800'}`}>Live Control</button>
            {isFullAdmin && (
              <>
-               <button onClick={() => setActiveTab('REPORT')} className={`px-6 py-3 rounded-xl text-sm font-black transition-all ${activeTab === 'REPORT' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500 hover:text-slate-800'}`}>Analytics</button>
+               <button onClick={() => setActiveTab('REPORT')} className={`px-6 py-3 rounded-xl text-sm font-black transition-all ${activeTab === 'REPORT' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500 hover:text-slate-800'}`}>Data Table</button>
                <button onClick={() => setActiveTab('STAFF')} className={`px-6 py-3 rounded-xl text-sm font-black transition-all ${activeTab === 'STAFF' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500 hover:text-slate-800'}`}>System Settings</button>
              </>
            )}
@@ -358,7 +388,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'LIVE' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-6">
-             {/* Voice Preference Section for Current User */}
              <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
                    <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600">
@@ -482,7 +511,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'STAFF' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fadeIn">
            <div className="space-y-8">
-              {/* Register Staff Section */}
               <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-xl">
                 <h3 className="text-2xl font-black mb-8 flex items-center gap-3"><UserPlus className="text-indigo-600" /> Register Staff</h3>
                 <div className="space-y-6">
@@ -500,9 +528,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                          <option value="">Select Counter...</option>
                          {availableCountersForRegistration.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                       </select>
-                      {availableCountersForRegistration.length === 0 && (
-                        <p className="text-[10px] font-bold text-rose-500 ml-4 uppercase mt-1 flex items-center gap-1"><AlertTriangle size={12} /> No Counters Available</p>
-                      )}
                    </div>
                    <button 
                      disabled={availableCountersForRegistration.length === 0}
@@ -519,7 +544,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Add Counter Section (NEW) */}
               <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-xl">
                 <h3 className="text-2xl font-black mb-8 flex items-center gap-3"><Layout className="text-indigo-600" /> Counter Management</h3>
                 <div className="space-y-6">
@@ -529,7 +553,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         value={newCounterName} 
                         onChange={(e) => setNewCounterName(e.target.value)} 
                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-6 py-4 outline-none focus:border-indigo-500 font-bold" 
-                        placeholder="e.g. Counter 5 or VIP Desk" 
+                        placeholder="e.g. Counter 5" 
                       />
                    </div>
                    <button 
@@ -537,7 +561,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                        if(!newCounterName) return alert('Please enter a counter name');
                        onAddCounter(newCounterName);
                        setNewCounterName('');
-                       alert(`Counter "${newCounterName}" added successfully!`);
+                       alert(`Counter "${newCounterName}" added!`);
                      }}
                      className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl"
                    >
@@ -546,7 +570,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Danger Zone Section */}
               <div className="bg-white p-10 rounded-[3rem] border border-rose-100 shadow-xl bg-rose-50/20">
                 <div className="flex items-center gap-3 text-rose-600 mb-6">
                    <AlertTriangle size={24} />
@@ -554,7 +577,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 <button 
                   onClick={handleResetLocal} 
-                  className="w-full py-5 text-rose-600 border-2 border-rose-100 rounded-2xl font-black text-sm flex items-center justify-center gap-3 hover:bg-rose-600 hover:text-white hover:border-rose-600 transition-all active:scale-95"
+                  className="w-full py-5 text-rose-600 border-2 border-rose-100 rounded-2xl font-black text-sm flex items-center justify-center gap-3 hover:bg-rose-600 hover:text-white transition-all active:scale-95"
                 >
                   <RefreshCcw size={18} /> WIPE ALL SYSTEM DATA
                 </button>
@@ -579,29 +602,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                </p>
                             </div>
                          </div>
-                         
                          {u.id !== 'admin-1' && (
-                           <button 
-                             onClick={() => handleDeleteStaffLocal(u.id)}
-                             className="p-3 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
-                           >
+                           <button onClick={() => handleDeleteStaffLocal(u.id)} className="p-3 text-slate-400 hover:text-rose-600 transition-all">
                               <Trash2 size={20} />
                            </button>
                          )}
                       </div>
                     ))}
-                 </div>
-
-                 <div className="space-y-3 pt-6 border-t border-slate-100">
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">System Counters</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                       {queue.counters.map(c => (
-                         <div key={c.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between">
-                            <span className="font-black text-slate-700">{c.name}</span>
-                            <div className={`w-2 h-2 rounded-full ${c.isActive ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                         </div>
-                       ))}
-                    </div>
                  </div>
               </div>
            </div>
@@ -610,31 +617,117 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {activeTab === 'REPORT' && (
         <div className="space-y-8 animate-fadeIn">
-           <div className="bg-slate-900 rounded-[3rem] p-10 text-white relative overflow-hidden">
-              <div className="relative z-10 space-y-8">
-                 <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-                    <div className="flex items-center gap-4">
-                       <BrainCircuit size={48} className="text-indigo-400" />
-                       <h3 className="text-3xl font-black">AI Business Analytics</h3>
+           <div className="bg-white rounded-[3rem] border border-slate-200 shadow-xl overflow-hidden">
+              <div className="p-8 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row items-center justify-between gap-6">
+                 <div className="flex items-center gap-4">
+                    <div className="bg-indigo-600 p-3 rounded-2xl text-white shadow-lg">
+                       <Filter size={24} />
                     </div>
-                    <button 
-                      onClick={handleAIReport} 
-                      disabled={isGeneratingReport} 
-                      className="px-10 py-5 bg-indigo-600 rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all flex items-center gap-3"
-                    >
-                      {isGeneratingReport ? <RefreshCcw className="animate-spin" /> : <TrendingUp />} GENERATE REPORT
-                    </button>
+                    <div>
+                       <h3 className="text-2xl font-black text-slate-900">Data Table Explorer</h3>
+                       <p className="text-slate-500 text-sm font-medium">Search and filter queue records</p>
+                    </div>
                  </div>
 
-                 <div className="bg-white/5 backdrop-blur-xl rounded-[2.5rem] p-8 border border-white/10 min-h-[400px]">
-                    {aiReport ? (
-                      <div className="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed">{aiReport}</div>
-                    ) : (
-                      <div className="h-full flex flex-col items-center justify-center text-center py-20 opacity-20">
-                         <Waves size={100} className="mb-6 animate-pulse" />
-                         <p className="text-2xl font-black">Run report to see AI-driven insights</p>
-                      </div>
-                    )}
+                 <div className="flex flex-wrap items-center gap-4">
+                    <div className="relative">
+                       <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                       <input 
+                         type="date" 
+                         value={filterDate}
+                         onChange={(e) => setFilterDate(e.target.value)}
+                         className="pl-12 pr-6 py-3 bg-white border-2 border-slate-100 rounded-2xl outline-none focus:border-indigo-500 font-bold text-sm text-slate-700"
+                       />
+                    </div>
+                    <div className="relative">
+                       <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                       <input 
+                         type="text" 
+                         placeholder="Ticket #"
+                         value={searchQuery}
+                         onChange={(e) => setSearchQuery(e.target.value)}
+                         className="pl-12 pr-6 py-3 bg-white border-2 border-slate-100 rounded-2xl outline-none focus:border-indigo-500 font-bold text-sm text-slate-700 w-32 md:w-48"
+                       />
+                    </div>
+                    <button 
+                       onClick={handleDownloadCSV} 
+                       className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl font-black text-sm hover:bg-slate-800 transition-all shadow-lg shadow-slate-200"
+                    >
+                       <Download size={18} /> EXPORT EXCEL
+                    </button>
+                 </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                 <table className="w-full text-left border-collapse">
+                    <thead>
+                       <tr className="bg-slate-50 border-b border-slate-100">
+                          <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400"># Ticket</th>
+                          <th className="px-6 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Status</th>
+                          <th className="px-6 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Counter</th>
+                          <th className="px-6 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Created At</th>
+                          <th className="px-6 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-right">Wait Time</th>
+                          <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-right">Svc Time</th>
+                       </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                       {filteredHistoryTickets.length === 0 ? (
+                         <tr>
+                            <td colSpan={6} className="px-8 py-20 text-center">
+                               <div className="flex flex-col items-center gap-4 opacity-20">
+                                  <RefreshCcw size={48} />
+                                  <p className="text-xl font-black">No records found for this criteria</p>
+                               </div>
+                            </td>
+                         </tr>
+                       ) : (
+                         filteredHistoryTickets.map((t) => {
+                           const counterName = queue.counters.find(c => c.id === t.counterId)?.name || "-";
+                           const waitTime = t.calledAt ? ((t.calledAt - t.createdAt) / 60000).toFixed(1) : "-";
+                           const serviceTime = (t.servedAt && t.calledAt) ? ((t.servedAt - t.calledAt) / 60000).toFixed(1) : "-";
+                           
+                           return (
+                             <tr key={t.id} className="hover:bg-slate-50 transition-colors group">
+                                <td className="px-8 py-5">
+                                   <div className="flex items-center gap-3">
+                                      <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black shadow-md shadow-indigo-100">{t.number}</div>
+                                      <span className="text-slate-400 text-[10px] font-mono group-hover:text-slate-900 transition-colors">{t.id.slice(0, 6)}</span>
+                                   </div>
+                                </td>
+                                <td className="px-6 py-5">
+                                   <span className={`px-3 py-1 rounded-full text-[10px] font-black tracking-tight ${
+                                      t.status === TicketStatus.SERVED ? 'bg-emerald-100 text-emerald-600' :
+                                      t.status === TicketStatus.CANCELLED ? 'bg-rose-100 text-rose-600' :
+                                      t.status === TicketStatus.CALLING ? 'bg-indigo-100 text-indigo-600 animate-pulse' :
+                                      'bg-slate-100 text-slate-500'
+                                   }`}>
+                                      {t.status}
+                                   </span>
+                                </td>
+                                <td className="px-6 py-5 font-bold text-slate-700 text-sm">{counterName}</td>
+                                <td className="px-6 py-5">
+                                   <p className="text-sm font-bold text-slate-900">{new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{new Date(t.createdAt).toLocaleDateString()}</p>
+                                </td>
+                                <td className="px-6 py-5 text-right font-mono text-sm font-bold text-slate-500">{waitTime}{waitTime !== '-' ? 'm' : ''}</td>
+                                <td className="px-8 py-5 text-right font-mono text-sm font-bold text-indigo-600">{serviceTime}{serviceTime !== '-' ? 'm' : ''}</td>
+                             </tr>
+                           );
+                         })
+                       )}
+                    </tbody>
+                 </table>
+              </div>
+              
+              <div className="p-8 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Showing {filteredHistoryTickets.length} of {queue.tickets.length} total entries</p>
+                 <div className="flex items-center gap-4 text-[10px] font-black uppercase text-indigo-600">
+                    <div className="flex items-center gap-2">
+                       <div className="w-2 h-2 bg-emerald-500 rounded-full" /> {filteredHistoryTickets.filter(t => t.status === TicketStatus.SERVED).length} Served
+                    </div>
+                    <div className="flex items-center gap-2">
+                       <div className="w-2 h-2 bg-rose-500 rounded-full" /> {filteredHistoryTickets.filter(t => t.status === TicketStatus.CANCELLED).length} Skipped
+                    </div>
                  </div>
               </div>
            </div>
